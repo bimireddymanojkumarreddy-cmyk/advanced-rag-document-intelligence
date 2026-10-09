@@ -13,7 +13,10 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 import chromadb
 from google import genai
-
+import numpy as np
+import onnxruntime as ort
+from tokenizers import Tokenizer
+from huggingface_hub import hf_hub_download
 
 # ==================================================
 # PROJECT PATH
