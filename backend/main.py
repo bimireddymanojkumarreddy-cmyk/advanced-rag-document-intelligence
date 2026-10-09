@@ -71,19 +71,77 @@ UPLOAD_DIR.mkdir(
 
 CHROMA_DIR = BASE_DIR / "chroma_db"
 
+
 # ==================================================
 # EMBEDDING MODEL — PRE-EXPORTED ONNX CPU
 # ==================================================
 
-embedding_model = SentenceTransformer(
-    "sentence-transformers/all-MiniLM-L6-v2",
-    backend="onnx",
-    model_kwargs={
-        "provider": "CPUExecutionProvider",
-        "file_name": "onnx/model_O4.onnx",
-        "export": False,
-    },
+MODEL_REPO = "sentence-transformers/all-MiniLM-L6-v2"
+
+model_path = hf_hub_download(
+    repo_id=MODEL_REPO,
+    filename="onnx/model.onnx",
 )
+
+tokenizer_path = hf_hub_download(
+    repo_id=MODEL_REPO,
+    filename="tokenizer.json",
+)
+
+tokenizer = Tokenizer.from_file(tokenizer_path)
+
+embedding_session = ort.InferenceSession(
+    model_path,
+    providers=["CPUExecutionProvider"],
+)
+
+# ==================================================
+# EMBEDDING FUNCTION
+# ==================================================
+
+def create_embeddings(texts):
+    encoded = tokenizer.encode_batch(texts)
+
+    input_ids = np.array(
+        [item.ids for item in encoded],
+        dtype=np.int64,
+    )
+    attention_mask = np.array(
+        [item.attention_mask for item in encoded],
+        dtype=np.int64,
+    )
+
+    model_inputs = {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+    }
+
+    input_names = {
+        item.name for item in embedding_session.get_inputs()
+    }
+
+    if "token_type_ids" in input_names:
+        model_inputs["token_type_ids"] = np.array(
+            [item.type_ids for item in encoded],
+            dtype=np.int64,
+        )
+
+    outputs = embedding_session.run(None, model_inputs)
+    token_embeddings = outputs[0]
+
+    mask = attention_mask[:, :, np.newaxis].astype(np.float32)
+    summed = np.sum(token_embeddings * mask, axis=1)
+    counts = np.maximum(mask.sum(axis=1), 1e-9)
+    sentence_embeddings = summed / counts
+
+    norms = np.linalg.norm(
+        sentence_embeddings, axis=1, keepdims=True
+    )
+    sentence_embeddings = sentence_embeddings / np.maximum(
+        norms, 1e-12
+    )
+
+    return sentence_embeddings
 
 # ==================================================
 # CHROMADB
@@ -297,10 +355,7 @@ async def upload_document(
     # Create embeddings
     # --------------------------------------------------
 
-    embeddings = embedding_model.encode(
-        all_chunks
-    )
-
+   embeddings = create_embeddings(all_chunks).tolist()
 
     # --------------------------------------------------
     # Create unique IDs
