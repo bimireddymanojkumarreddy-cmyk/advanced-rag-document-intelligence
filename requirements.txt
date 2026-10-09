@@ -5,4 +5,7 @@ python-dotenv
 pypdf
 chromadb
 google-genai
-sentence-transformers[onnx]
+onnxruntime
+tokenizers
+huggingface-hub
+numpy
