@@ -1,52 +1,43 @@
-
+```python
 from pathlib import Path
 import os
 import json
 
-from dotenv import load_dotenv
+import numpy as np
+import chromadb
+import onnxruntime as ort
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
-from pypdf import PdfReader
-import chromadb
-from google import genai
-import numpy as np
-import onnxruntime as ort
-from tokenizers import Tokenizer
 from huggingface_hub import hf_hub_download
+from pypdf import PdfReader
+from tokenizers import Tokenizer
+from google import genai
+
 
 # ==================================================
-# PROJECT PATH
+# PROJECT PATHS
 # ==================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# ==================================================
-# LOAD ENVIRONMENT VARIABLES
-# ==================================================
-
 ENV_FILE = BASE_DIR / ".env"
+UPLOAD_DIR = BASE_DIR / "uploads"
+CHROMA_DIR = BASE_DIR / "chroma_db"
 
-load_dotenv(
-    dotenv_path=ENV_FILE
-)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+
+load_dotenv(dotenv_path=ENV_FILE)
 
 
 # ==================================================
 # FASTAPI
 # ==================================================
 
-app = FastAPI(
-    title="Advanced RAG API"
-)
-
-
-# ==================================================
-# CORS
-# ==================================================
+app = FastAPI(title="Advanced RAG API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,21 +49,7 @@ app.add_middleware(
 
 
 # ==================================================
-# PROJECT DIRECTORIES
-# ==================================================
-
-UPLOAD_DIR = BASE_DIR / "uploads"
-
-UPLOAD_DIR.mkdir(
-    exist_ok=True
-)
-
-
-CHROMA_DIR = BASE_DIR / "chroma_db"
-
-
-# ==================================================
-# EMBEDDING MODEL — PRE-EXPORTED ONNX CPU
+# ONNX EMBEDDING MODEL
 # ==================================================
 
 MODEL_REPO = "sentence-transformers/all-MiniLM-L6-v2"
@@ -95,6 +72,7 @@ embedding_session = ort.InferenceSession(
     model_path,
     providers=["CPUExecutionProvider"],
 )
+
 print("ONNX model inputs:")
 for item in embedding_session.get_inputs():
     print(item.name, item.shape, item.type)
@@ -103,17 +81,24 @@ print("ONNX model outputs:")
 for item in embedding_session.get_outputs():
     print(item.name, item.shape, item.type)
 
+
 # ==================================================
-# EMBEDDING FUNCTION
+# CREATE EMBEDDINGS
 # ==================================================
 
 def create_embeddings(texts):
-    encoded = tokenizer.encode_batch(texts)
+    if not texts:
+        return np.empty((0, 384), dtype=np.float32)
+
+    encoded = tokenizer.encode_batch(
+        [str(text) for text in texts]
+    )
 
     input_ids = np.array(
         [item.ids for item in encoded],
         dtype=np.int64,
     )
+
     attention_mask = np.array(
         [item.attention_mask for item in encoded],
         dtype=np.int64,
@@ -134,22 +119,67 @@ def create_embeddings(texts):
             dtype=np.int64,
         )
 
-    outputs = embedding_session.run(None, model_inputs)
+    outputs = embedding_session.run(
+        None,
+        model_inputs,
+    )
+
+    # The standard MiniLM ONNX encoder should return
+    # token embeddings with shape (batch, tokens, 384).
     token_embeddings = outputs[0]
 
-    mask = attention_mask[:, :, np.newaxis].astype(np.float32)
-    summed = np.sum(token_embeddings * mask, axis=1)
-    counts = np.maximum(mask.sum(axis=1), 1e-9)
+    if token_embeddings.ndim != 3:
+        raise RuntimeError(
+            "Unexpected ONNX output shape: "
+            f"{token_embeddings.shape}. "
+            "Expected token-level embeddings."
+        )
+
+    if token_embeddings.shape[-1] != 384:
+        raise RuntimeError(
+            "Unexpected embedding dimension: "
+            f"{token_embeddings.shape[-1]}. "
+            "Expected 384."
+        )
+
+    mask = attention_mask[:, :, np.newaxis].astype(
+        np.float32
+    )
+
+    token_embeddings = token_embeddings.astype(
+        np.float32
+    )
+
+    summed = np.sum(
+        token_embeddings * mask,
+        axis=1,
+    )
+
+    counts = np.maximum(
+        mask.sum(axis=1),
+        1e-9,
+    )
+
     sentence_embeddings = summed / counts
 
     norms = np.linalg.norm(
-        sentence_embeddings, axis=1, keepdims=True
-    )
-    sentence_embeddings = sentence_embeddings / np.maximum(
-        norms, 1e-12
+        sentence_embeddings,
+        axis=1,
+        keepdims=True,
     )
 
-    return sentence_embeddings
+    sentence_embeddings = sentence_embeddings / np.maximum(
+        norms,
+        1e-12,
+    )
+
+    if not np.isfinite(sentence_embeddings).all():
+        raise RuntimeError(
+            "Embedding generation produced invalid values."
+        )
+
+    return sentence_embeddings.astype(np.float32)
+
 
 # ==================================================
 # CHROMADB
@@ -168,32 +198,26 @@ collection = chroma_client.get_or_create_collection(
 # GEMINI
 # ==================================================
 
-gemini_api_key = os.getenv(
-    "GEMINI_API_KEY"
-)
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 if not gemini_api_key:
-
     raise RuntimeError(
         "GEMINI_API_KEY environment variable is missing."
     )
-
 
 gemini_client = genai.Client(
     api_key=gemini_api_key
 )
 
-
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 # ==================================================
-# HOME
+# HOME / HEALTH CHECK
 # ==================================================
 
 @app.get("/")
 def home():
-
     return {
         "message": "Advanced RAG API is running"
     }
@@ -205,217 +229,122 @@ def home():
 
 @app.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
-
-    # --------------------------------------------------
-    # Validate filename
-    # --------------------------------------------------
-
     if not file.filename:
-
-        return {
-            "message": "No filename provided."
-        }
-
-
-    # --------------------------------------------------
-    # Supported file types
-    # --------------------------------------------------
-
-    allowed_extensions = {
-        ".pdf",
-        ".txt"
-    }
-
-
-    extension = Path(
-        file.filename
-    ).suffix.lower()
-
-
-    if extension not in allowed_extensions:
-
-        return {
-            "message": (
-                "Unsupported file type. "
-                "Only PDF and TXT files are supported."
-            ),
-            "filename": file.filename
-        }
-
-
-    # --------------------------------------------------
-    # Save uploaded file
-    # --------------------------------------------------
-
-    file_path = UPLOAD_DIR / file.filename
-
-
-    with open(
-        file_path,
-        "wb"
-    ) as buffer:
-
-        buffer.write(
-            await file.read()
+        raise HTTPException(
+            status_code=400,
+            detail="No filename provided.",
         )
 
+    safe_filename = Path(file.filename).name
 
-    # --------------------------------------------------
-    # Remove old chunks of same document
-    # --------------------------------------------------
-
-    existing = collection.get(
-        where={
-            "filename": file.filename
-        }
-    )
-
-
-    if existing["ids"]:
-
-        collection.delete(
-            ids=existing["ids"]
+    if safe_filename != file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename.",
         )
 
+    extension = Path(safe_filename).suffix.lower()
 
-    # --------------------------------------------------
-    # Extract document
-    # --------------------------------------------------
-
-    documents = extract_document(
-        file_path
-    )
-
-
-    if not documents:
-
-        return {
-            "message": "Could not extract text from document.",
-            "filename": file.filename
-        }
-
-
-    # --------------------------------------------------
-    # Create chunks
-    # --------------------------------------------------
-
-    all_chunks = []
-
-    all_metadata = []
-
-    chunk_counter = 0
-
-
-    for document in documents:
-
-        text = document["text"]
-
-        page = document["page"]
-
-
-        chunks = create_chunks(
-            text
+    if extension not in {".pdf", ".txt"}:
+        raise HTTPException(
+            status_code=415,
+            detail="Only PDF and TXT files are supported.",
         )
 
+    file_path = UPLOAD_DIR / safe_filename
 
-        for chunk in chunks:
+    try:
+        content = await file.read()
 
-            all_chunks.append(
-                chunk
+        if not content:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is empty.",
             )
 
+        file_path.write_bytes(content)
 
-            metadata = {
-                "filename": file.filename,
-                "chunk_id": chunk_counter
-            }
+        documents = extract_document(file_path)
 
+        if not documents:
+            file_path.unlink(missing_ok=True)
 
-            # Add page number for PDF
-            if page is not None:
-
-                metadata["page"] = page
-
-
-            all_metadata.append(
-                metadata
+            raise HTTPException(
+                status_code=422,
+                detail="Could not extract text from document.",
             )
 
+        all_chunks = []
+        all_metadata = []
 
-            chunk_counter += 1
+        for document in documents:
+            chunks = create_chunks(document["text"])
 
+            for chunk in chunks:
+                metadata = {
+                    "filename": safe_filename,
+                    "chunk_id": len(all_chunks),
+                }
 
-    # --------------------------------------------------
-    # Safety check
-    # --------------------------------------------------
+                if document["page"] is not None:
+                    metadata["page"] = document["page"]
 
-    if not all_chunks:
+                all_chunks.append(chunk)
+                all_metadata.append(metadata)
+
+        if not all_chunks:
+            file_path.unlink(missing_ok=True)
+
+            raise HTTPException(
+                status_code=422,
+                detail="No usable text was found in the document.",
+            )
+
+        # Generate one embedding per chunk.
+        embeddings = create_embeddings(all_chunks).tolist()
+
+        ids = [
+            f"{safe_filename}_{i}"
+            for i in range(len(all_chunks))
+        ]
+
+        # Replace existing indexed chunks for this filename.
+        existing = collection.get(
+            where={"filename": safe_filename}
+        )
+
+        if existing["ids"]:
+            collection.delete(ids=existing["ids"])
+
+        collection.add(
+            ids=ids,
+            documents=all_chunks,
+            embeddings=embeddings,
+            metadatas=all_metadata,
+        )
 
         return {
-            "message": "No usable text was found in the document.",
-            "filename": file.filename
+            "message": "Document stored successfully",
+            "filename": safe_filename,
+            "total_chunks": len(all_chunks),
+            "embedding_size": len(embeddings[0]),
         }
 
+    except HTTPException:
+        raise
 
-    # --------------------------------------------------
-    # Create embeddings
-    # --------------------------------------------------
+    except Exception as exc:
+        print(f"Document upload error: {exc}")
 
-     embeddings = create_embeddings(all_chunks).tolist()
+        raise HTTPException(
+            status_code=500,
+            detail="Document processing failed. Check the server logs.",
+        ) from exc
 
-    # --------------------------------------------------
-    # Create unique IDs
-    # --------------------------------------------------
-
-    ids = [
-
-        f"{file.filename}_{i}"
-
-        for i in range(
-            len(all_chunks)
-        )
-
-    ]
-
-
-    # --------------------------------------------------
-    # Store in ChromaDB
-    # --------------------------------------------------
-
-    collection.add(
-
-        ids=ids,
-
-        documents=all_chunks,
-
-        embeddings=embeddings.tolist(),
-
-        metadatas=all_metadata
-
-    )
-
-
-    # --------------------------------------------------
-    # Response
-    # --------------------------------------------------
-
-    return {
-
-        "message": "Document stored successfully",
-
-        "filename": file.filename,
-
-        "total_chunks": len(
-            all_chunks
-        ),
-
-        "embedding_size": len(
-            embeddings[0]
-        )
-
-    }
+    finally:
+        await file.close()
 
 
 # ==================================================
@@ -424,33 +353,18 @@ async def upload_document(
 
 @app.get("/documents")
 def get_documents():
-
     results = collection.get(
         include=["metadatas"]
     )
 
-
     documents = set()
 
-
-    for metadata in results["metadatas"]:
-
-        if (
-            metadata
-            and "filename" in metadata
-        ):
-
-            documents.add(
-                metadata["filename"]
-            )
-
+    for metadata in results["metadatas"] or []:
+        if metadata and metadata.get("filename"):
+            documents.add(metadata["filename"])
 
     return {
-
-        "documents": sorted(
-            documents
-        )
-
+        "documents": sorted(documents)
     }
 
 
@@ -459,124 +373,80 @@ def get_documents():
 # ==================================================
 
 @app.delete("/documents/{filename}")
-def delete_document(
-    filename: str
-):
-
+def delete_document(filename: str):
     safe_filename = Path(filename).name
 
-    if safe_filename != filename:
-
-        return {
-            "message": "Invalid filename."
-        }
-
-
-    # Find all chunks belonging to this document
+    if not safe_filename or safe_filename != filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename.",
+        )
 
     existing = collection.get(
-        where={
-            "filename": safe_filename
-        }
+        where={"filename": safe_filename}
     )
-
 
     if not existing["ids"]:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
 
-        return {
-            "message": "Document not found.",
-            "filename": safe_filename
-        }
-
-
-    # Delete chunks and embeddings from ChromaDB
-
-    collection.delete(
-        ids=existing["ids"]
-    )
-
-
-    # Delete the physical uploaded file
+    collection.delete(ids=existing["ids"])
 
     file_path = UPLOAD_DIR / safe_filename
 
-
-    if file_path.exists():
-
+    if file_path.is_file():
         file_path.unlink()
 
-
     return {
-
         "message": "Document deleted successfully.",
-
         "filename": safe_filename,
-
-        "deleted_chunks": len(
-            existing["ids"]
-        )
-
+        "deleted_chunks": len(existing["ids"]),
     }
 
 
 # ==================================================
-# VIEW UPLOADED DOCUMENT - NEW FEATURE
+# VIEW DOCUMENT
 # ==================================================
 
 @app.get("/documents/{filename}/view")
-def view_document(
-    filename: str
-):
-
-    # Validate the filename to prevent path traversal.
+def view_document(filename: str):
     safe_filename = Path(filename).name
 
     if not safe_filename or safe_filename != filename:
-
         raise HTTPException(
             status_code=400,
-            detail="Invalid filename."
+            detail="Invalid filename.",
         )
 
-
-    # Only PDF and TXT files can be viewed.
-    extension = Path(
-        safe_filename
-    ).suffix.lower()
+    extension = Path(safe_filename).suffix.lower()
 
     if extension not in {".pdf", ".txt"}:
-
         raise HTTPException(
             status_code=415,
-            detail="Only PDF and TXT files can be viewed."
+            detail="Only PDF and TXT files can be viewed.",
         )
 
-
-    # Serve only files inside the uploads directory.
     file_path = UPLOAD_DIR / safe_filename
 
     if not file_path.is_file():
-
         raise HTTPException(
             status_code=404,
-            detail="Document not found."
+            detail="Document not found.",
         )
 
-
-    # Choose the correct content type.
     media_type = (
         "application/pdf"
         if extension == ".pdf"
         else "text/plain; charset=utf-8"
     )
 
-
-    # Display the document inline in the browser.
     return FileResponse(
         path=file_path,
         media_type=media_type,
         filename=safe_filename,
-        content_disposition_type="inline"
+        content_disposition_type="inline",
     )
 
 
@@ -586,43 +456,39 @@ def view_document(
 
 @app.get("/search")
 def search_documents(
-
     query: str,
-
-    top_k: int = 3
-
+    top_k: int = 3,
 ):
+    query = query.strip()
 
-    
-# --------------------------------------------------
-# Create query embedding
-# --------------------------------------------------
+    if not query:
+        raise HTTPException(
+            status_code=400,
+            detail="Query cannot be empty.",
+        )
 
-query_embedding = create_embeddings([query]).tolist()
+    top_k = max(1, min(top_k, 10))
 
-# --------------------------------------------------
-# Search ChromaDB
-# --------------------------------------------------
+    if collection.count() == 0:
+        return {
+            "query": query,
+            "results": [],
+            "metadata": [],
+        }
 
-results = collection.query(
-    query_embeddings=query_embedding,
-    n_results=top_k
-)
+    query_embedding = create_embeddings(
+        [query]
+    ).tolist()
 
-    # --------------------------------------------------
-    # Return results
-    # --------------------------------------------------
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=min(top_k, collection.count()),
+    )
 
     return {
-
         "query": query,
-
-        "results":
-        results["documents"][0],
-
-        "metadata":
-        results["metadatas"][0]
-
+        "results": results["documents"][0] or [],
+        "metadata": results["metadatas"][0] or [],
     }
 
 
@@ -632,263 +498,133 @@ results = collection.query(
 
 @app.get("/ask")
 def ask_question(
-
     query: str,
-
     top_k: int = 3,
-
-    conversation_history: str = ""
-
+    conversation_history: str = "",
 ):
+    query = query.strip()
 
-    # --------------------------------------------------
-    # Validate question
-    # --------------------------------------------------
-
-    if not query.strip():
-
+    if not query:
         return {
-
             "question": query,
-
             "answer": "Please enter a question.",
-
-            "sources": []
-
+            "sources": [],
         }
 
+    total_chunks = collection.count()
 
-    # --------------------------------------------------
-    # Check whether documents exist
-    # --------------------------------------------------
-
-    total_documents = collection.count()
-
-
-    if total_documents == 0:
-
+    if total_chunks == 0:
         return {
-
             "question": query,
-
             "answer": (
                 "I could not find any uploaded documents. "
                 "Please upload a PDF or TXT document first."
             ),
-
-            "sources": []
-
+            "sources": [],
         }
 
+    top_k = max(1, min(top_k, 10))
 
-    # --------------------------------------------------
-    # Create query embedding
-    # --------------------------------------------------
-
-   query_embedding = create_embeddings([query]).tolist()
-
-    # --------------------------------------------------
-    # Retrieve relevant chunks
-    # --------------------------------------------------
+    query_embedding = create_embeddings(
+        [query]
+    ).tolist()
 
     results = collection.query(
-
-        query_embeddings=
-        query_embedding.tolist(),
-
-        n_results=top_k,
-
+        query_embeddings=query_embedding,
+        n_results=min(top_k, total_chunks),
         include=[
             "documents",
             "metadatas",
-            "distances"
-        ]
-
+            "distances",
+        ],
     )
 
+    retrieved_chunks = results["documents"][0] or []
+    metadata = results["metadatas"][0] or []
+    distances = results["distances"][0] or []
 
-    # --------------------------------------------------
-    # Retrieved chunks
-    # --------------------------------------------------
-
-    retrieved_chunks = results[
-        "documents"
-    ][0]
-
-
-    metadata = results[
-        "metadatas"
-    ][0]
-
-
-    distances = results[
-        "distances"
-    ][0]
-
-
-    # --------------------------------------------------
-    # Relevance filtering
-    # --------------------------------------------------
-
-    RELEVANCE_THRESHOLD = 1.2
-
+    relevance_threshold = 1.2
 
     relevant_chunks = []
-
     relevant_metadata = []
 
-
     for chunk, source_metadata, distance in zip(
-
         retrieved_chunks,
-
         metadata,
-
-        distances
-
+        distances,
     ):
-
-        if distance <= RELEVANCE_THRESHOLD:
-
-            relevant_chunks.append(
-                chunk
-            )
-
-            relevant_metadata.append(
-                source_metadata
-            )
-
-
-    # --------------------------------------------------
-    # No sufficiently relevant information
-    # --------------------------------------------------
+        if distance <= relevance_threshold:
+            relevant_chunks.append(chunk)
+            relevant_metadata.append(source_metadata)
 
     if not relevant_chunks:
-
         return {
-
             "question": query,
-
             "answer": (
                 "I could not find the answer "
                 "in the uploaded documents."
             ),
-
-            "sources": []
-
+            "sources": [],
         }
 
+    context = "\n\n".join(relevant_chunks)
 
-    # --------------------------------------------------
-    # Create context
-    # --------------------------------------------------
-
-    context = "\n\n".join(
-        relevant_chunks
-    )
-
-
-    # --------------------------------------------------
-    # Conversation history
-    # --------------------------------------------------
-
+    # Safely format conversation history.
     history_text = ""
 
-
     if conversation_history.strip():
-
         try:
-
-            history = json.loads(
-                conversation_history
-            )
-
+            history = json.loads(conversation_history)
 
             if isinstance(history, list):
-
-                recent_history = history[-10:]
-
-
                 history_lines = []
 
-
-                for message in recent_history:
-
+                for message in history[-10:]:
                     if not isinstance(message, dict):
-
                         continue
 
-
-                    role = message.get(
-                        "role",
-                        ""
-                    )
-
-
-                    content = message.get(
-                        "content",
-                        ""
-                    )
-
+                    role = message.get("role")
+                    content = message.get("content")
 
                     if (
-                        role in {
-                            "user",
-                            "assistant"
-                        }
-                        and content
+                        role in {"user", "assistant"}
+                        and isinstance(content, str)
+                        and content.strip()
                     ):
-
                         speaker = (
                             "User"
                             if role == "user"
                             else "Assistant"
                         )
 
-
                         history_lines.append(
-
                             f"{speaker}: {content}"
-
                         )
 
+                history_text = "\n".join(history_lines)
 
-                history_text = "\\n".join(
-                    history_lines
-                )
-
-
-        except json.JSONDecodeError:
-
+        except (json.JSONDecodeError, TypeError):
             history_text = ""
-
-
-    # --------------------------------------------------
-    # Gemini prompt
-    # --------------------------------------------------
 
     prompt = f"""
 You are a helpful document question-answering assistant.
 
 Answer the user's question using ONLY the information
-provided in the context below.
+provided in the document context below.
 
 If the answer cannot be found in the context, say:
-
 "I could not find the answer in the uploaded documents."
 
-Do not make up information.
+Do not invent facts. Keep the answer clear and concise.
 
-Keep the answer clear and concise.
+Use conversation history only to understand references
+and follow-up questions. The document context remains
+the only source of factual answers.
 
 Conversation history:
 {history_text}
 
-Use the conversation history only to understand references
-such as "it", "they", "this", or follow-up questions.
-The uploaded document context remains the only source of facts.
-
-Context:
+Document context:
 {context}
 
 User question:
@@ -897,58 +633,48 @@ User question:
 Answer:
 """
 
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+        )
 
-    # --------------------------------------------------
-    # Generate answer
-    # --------------------------------------------------
+        answer = response.text or (
+            "The AI model did not return a text response."
+        )
 
-    response = gemini_client.models.generate_content(
+    except Exception as exc:
+        print(f"Gemini generation error: {exc}")
 
-        model=GEMINI_MODEL,
-
-        contents=prompt
-
-    )
-
-
-    # --------------------------------------------------
-    # Return answer and relevant sources
-    # --------------------------------------------------
+        raise HTTPException(
+            status_code=502,
+            detail="Answer generation failed. Check the server logs.",
+        ) from exc
 
     sources = []
 
     for chunk, source_metadata in zip(
         relevant_chunks,
-        relevant_metadata
+        relevant_metadata,
     ):
-
         source = {
             "filename": source_metadata.get(
                 "filename",
-                "Unknown document"
+                "Unknown document",
             ),
-            "chunk_id": source_metadata.get(
-                "chunk_id"
-            ),
-            "text": chunk
+            "chunk_id": source_metadata.get("chunk_id"),
+            "text": chunk,
         }
 
-        # Include page number only when available
         if source_metadata.get("page") is not None:
-
             source["page"] = source_metadata["page"]
 
         sources.append(source)
 
-
     return {
-
         "question": query,
-
-        "answer": response.text,
-
-        "sources": sources
-
+        "answer": answer,
+        "sources": sources,
     }
 
 
@@ -956,80 +682,38 @@ Answer:
 # DOCUMENT EXTRACTION
 # ==================================================
 
-def extract_document(
-    file_path: Path
-):
-
+def extract_document(file_path: Path):
     documents = []
 
-
-    # ==================================================
-    # TXT
-    # ==================================================
-
     if file_path.suffix.lower() == ".txt":
-
         text = file_path.read_text(
-            encoding="utf-8"
+            encoding="utf-8-sig"
         )
-
 
         if text.strip():
-
             documents.append({
-
                 "text": text,
-
-                "page": None
-
+                "page": None,
             })
 
-
         return documents
-
-
-    # ==================================================
-    # PDF
-    # ==================================================
 
     if file_path.suffix.lower() == ".pdf":
-
-        reader = PdfReader(
-            str(file_path)
-        )
-
+        reader = PdfReader(str(file_path))
 
         for page_number, page in enumerate(
-
             reader.pages,
-
-            start=1
-
+            start=1,
         ):
-
             text = page.extract_text()
 
-
-            if (
-                text
-                and text.strip()
-            ):
-
+            if text and text.strip():
                 documents.append({
-
                     "text": text,
-
-                    "page": page_number
-
+                    "page": page_number,
                 })
 
-
         return documents
-
-
-    # ==================================================
-    # UNSUPPORTED FILE
-    # ==================================================
 
     return documents
 
@@ -1039,41 +723,29 @@ def extract_document(
 # ==================================================
 
 def create_chunks(
-
     text: str,
-
     chunk_size: int = 500,
-
-    overlap: int = 50
-
+    overlap: int = 50,
 ):
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive.")
 
-    chunks = []
-
-
-    start = 0
-
-
-    while start < len(text):
-
-        end = start + chunk_size
-
-
-        chunk = text[
-            start:end
-        ]
-
-
-        if chunk.strip():
-
-            chunks.append(
-                chunk
-            )
-
-
-        start += (
-            chunk_size - overlap
+    if overlap < 0 or overlap >= chunk_size:
+        raise ValueError(
+            "overlap must be non-negative and smaller than chunk_size."
         )
 
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+
+        if chunk.strip():
+            chunks.append(chunk)
+
+        start += chunk_size - overlap
 
     return chunks
+```
