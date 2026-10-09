@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 import chromadb
 from google import genai
 import numpy as np
