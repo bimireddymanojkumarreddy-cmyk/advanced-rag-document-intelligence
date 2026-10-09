@@ -95,6 +95,13 @@ embedding_session = ort.InferenceSession(
     model_path,
     providers=["CPUExecutionProvider"],
 )
+print("ONNX model inputs:")
+for item in embedding_session.get_inputs():
+    print(item.name, item.shape, item.type)
+
+print("ONNX model outputs:")
+for item in embedding_session.get_outputs():
+    print(item.name, item.shape, item.type)
 
 # ==================================================
 # EMBEDDING FUNCTION
