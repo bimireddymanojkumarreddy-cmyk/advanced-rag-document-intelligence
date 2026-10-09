@@ -68,19 +68,19 @@ UPLOAD_DIR.mkdir(
 
 CHROMA_DIR = BASE_DIR / "chroma_db"
 
-
 # ==================================================
-# EMBEDDING MODEL — ONNX CPU
+# EMBEDDING MODEL — PRE-EXPORTED ONNX CPU
 # ==================================================
 
 embedding_model = SentenceTransformer(
     "sentence-transformers/all-MiniLM-L6-v2",
     backend="onnx",
     model_kwargs={
-        "provider": "CPUExecutionProvider"
-    }
+        "provider": "CPUExecutionProvider",
+        "file_name": "onnx/model_O4.onnx",
+        "export": False,
+    },
 )
-
 
 # ==================================================
 # CHROMADB
