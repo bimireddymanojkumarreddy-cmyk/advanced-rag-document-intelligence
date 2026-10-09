@@ -585,28 +585,21 @@ def search_documents(
 
 ):
 
-    # --------------------------------------------------
-    # Create query embedding
-    # --------------------------------------------------
+    
+# --------------------------------------------------
+# Create query embedding
+# --------------------------------------------------
 
-    query_embedding = embedding_model.encode(
-        [query]
-    )
+query_embedding = create_embeddings([query]).tolist()
 
+# --------------------------------------------------
+# Search ChromaDB
+# --------------------------------------------------
 
-    # --------------------------------------------------
-    # Search ChromaDB
-    # --------------------------------------------------
-
-    results = collection.query(
-
-        query_embeddings=
-        query_embedding.tolist(),
-
-        n_results=top_k
-
-    )
-
+results = collection.query(
+    query_embeddings=query_embedding,
+    n_results=top_k
+)
 
     # --------------------------------------------------
     # Return results
