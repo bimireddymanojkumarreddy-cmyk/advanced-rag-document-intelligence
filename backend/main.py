@@ -88,6 +88,8 @@ tokenizer_path = hf_hub_download(
 )
 
 tokenizer = Tokenizer.from_file(tokenizer_path)
+tokenizer.enable_truncation(max_length=256)
+tokenizer.enable_padding()
 
 embedding_session = ort.InferenceSession(
     model_path,
