@@ -5,6 +5,4 @@ python-dotenv
 pypdf
 chromadb
 google-genai
-onnxruntime
-optimum[onnxruntime]
-transformers
+sentence-transformers[onnx]
