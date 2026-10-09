@@ -4,6 +4,5 @@ uvicorn[standard]
 python-multipart
 python-dotenv
 pypdf
-sentence-transformers
 chromadb
 google-genai
