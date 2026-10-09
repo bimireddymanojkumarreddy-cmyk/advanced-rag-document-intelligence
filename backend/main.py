@@ -677,10 +677,7 @@ def ask_question(
     # Create query embedding
     # --------------------------------------------------
 
-    query_embedding = embedding_model.encode(
-        [query]
-    )
-
+   query_embedding = create_embeddings([query]).tolist()
 
     # --------------------------------------------------
     # Retrieve relevant chunks
