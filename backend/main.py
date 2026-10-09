@@ -1,4 +1,4 @@
-```python
+
 from pathlib import Path
 import os
 import json
@@ -748,4 +748,4 @@ def create_chunks(
         start += chunk_size - overlap
 
     return chunks
-```
+
