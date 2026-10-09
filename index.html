@@ -1,0 +1,243 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>RAG AI Assistant</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="app">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+
+            <!-- BRAND -->
+            <div class="sidebar-header">
+                <div class="brand-container">
+                    <div class="brand-icon">🤖</div>
+
+                    <div class="brand-text">
+                        <h2>RAG AI</h2>
+                        <p>Assistant</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NEW CHAT -->
+            <button
+                id="newChatButton"
+                class="new-chat-button"
+                type="button"
+            >
+                <span class="new-chat-icon">+</span>
+                <span>New Chat</span>
+            </button>
+
+            <!-- KNOWLEDGE BASE -->
+            <div class="document-section">
+
+                <div class="document-section-header">
+                    <h3>Knowledge Base</h3>
+
+                    <span
+                        id="documentCount"
+                        class="document-count"
+                    >0</span>
+                </div>
+
+                <div
+                    id="documentList"
+                    class="document-list"
+                >
+                    <p class="empty-documents">
+                        No documents uploaded
+                    </p>
+                </div>
+
+            </div>
+
+            <!-- SIDEBAR ACTIONS -->
+            <div class="sidebar-actions">
+
+                <!-- UPLOAD DOCUMENT -->
+                <div class="upload-section">
+
+                    <input
+                        type="file"
+                        id="fileInput"
+                        accept=".pdf,.txt"
+                    >
+
+                    <button
+                        id="uploadButton"
+                        class="sidebar-action-button"
+                        type="button"
+                    >
+                        <span class="action-icon">📤</span>
+                        <span>Upload Document</span>
+                    </button>
+
+                    <div
+                        id="uploadStatus"
+                        class="upload-status"
+                    ></div>
+
+                </div>
+
+                <!-- THEME -->
+                <button
+                    id="themeToggle"
+                    class="sidebar-action-button"
+                    type="button"
+                >
+                    <span
+                        id="themeIcon"
+                        class="action-icon"
+                    >☀️</span>
+
+                    <span id="themeText">Light Mode</span>
+                </button>
+
+            </div>
+
+            <!-- CLEAR CHAT -->
+            <button
+                id="clearChatButton"
+                class="clear-button"
+                type="button"
+            >
+                Clear Chat
+            </button>
+
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="main">
+
+            <!-- CHAT HEADER -->
+            <header class="chat-header">
+
+                <div>
+                    <h1>RAG AI Assistant</h1>
+                    <p>Ask questions about your documents</p>
+                </div>
+
+                <div class="online-status">
+                    <span class="online-dot"></span>
+                    <span>Online</span>
+                </div>
+
+            </header>
+
+            <!-- CHAT MESSAGES -->
+            <section
+                id="chatMessages"
+                class="chat-messages"
+            >
+
+                <div class="welcome-container">
+
+                    <div class="welcome-icon">🤖</div>
+
+                    <h2>RAG AI Assistant</h2>
+
+                    <p>
+                        Ask questions about your documents
+                        and get intelligent answers.
+                    </p>
+
+                </div>
+
+            </section>
+
+            <!-- QUESTION INPUT -->
+            <div class="input-area">
+
+                <div class="input-container">
+
+                    <span class="input-plus">+</span>
+
+                    <input
+                        type="text"
+                        id="questionInput"
+                        placeholder="Ask something about your documents..."
+                        autocomplete="off"
+                    >
+
+                    <button
+                        id="askButton"
+                        class="ask-button"
+                        type="button"
+                    >
+                        ➤
+                    </button>
+
+                </div>
+
+                <p class="input-hint">
+                    RAG AI Assistant can answer questions using your uploaded documents.
+                </p>
+
+            </div>
+
+            <!-- =========================================
+                 IN-APP DOCUMENT VIEWER
+                 Hidden until the user clicks View.
+                 ========================================= -->
+            <section
+                id="documentViewer"
+                class="document-viewer"
+                hidden
+                aria-label="Document viewer"
+            >
+
+                <div class="document-viewer-header">
+
+                    <div class="document-viewer-heading">
+                        <span>📄</span>
+
+                        <h2
+                            id="documentViewerTitle"
+                        >
+                            Document Preview
+                        </h2>
+                    </div>
+
+                    <button
+                        id="closeDocumentViewer"
+                        class="close-document-viewer"
+                        type="button"
+                    >
+                        ← Back to Chat
+                    </button>
+
+                </div>
+
+                <div
+                    id="documentViewerContent"
+                    class="document-viewer-content"
+                >
+                    <p>Select a document to preview it.</p>
+                </div>
+
+            </section>
+
+        </main>
+
+    </div>
+
+    <script src="script.js"></script>
+
+</body>
+</html>
