@@ -70,11 +70,15 @@ CHROMA_DIR = BASE_DIR / "chroma_db"
 
 
 # ==================================================
-# EMBEDDING MODEL
+# EMBEDDING MODEL — ONNX CPU
 # ==================================================
 
 embedding_model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
+    "sentence-transformers/all-MiniLM-L6-v2",
+    backend="onnx",
+    model_kwargs={
+        "provider": "CPUExecutionProvider"
+    }
 )
 
 
