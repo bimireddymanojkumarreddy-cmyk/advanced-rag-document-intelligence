@@ -363,7 +363,7 @@ async def upload_document(
     # Create embeddings
     # --------------------------------------------------
 
-   embeddings = create_embeddings(all_chunks).tolist()
+     embeddings = create_embeddings(all_chunks).tolist()
 
     # --------------------------------------------------
     # Create unique IDs
